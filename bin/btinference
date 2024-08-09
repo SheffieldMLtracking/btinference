@@ -1,0 +1,147 @@
+#!/usr/bin/env python
+import argparse
+import alignment
+import alignment.helper
+import numpy as np
+from pathinference import PathInference
+from pathinference.kernel import EQ
+import btinference
+import os
+import sys
+from pathlib import Path
+import json
+
+
+parser = argparse.ArgumentParser(description='Runs the 3d path inference algorithm for the bee-track project. This can either run a cross validation check, or can simply output the flight path.')
+parser.add_argument('imgpath',type=str,help='Path to images (this needs to be to the *set* folder, e.g. 2024-06-20/CalibTest200624/conetag2')
+parser.add_argument('--calset',required=False,type=str,help='Name of the alignment set (default = \'cal\'). This will look in a neighbouring folder to the set.',default='cal')
+parser.add_argument('--xval',help='Setting this means the algorithm will just do a cross-validation check (and won\'t write to the config file).',action="store_true")
+parser.add_argument('--after',required=False,type=str,help='Only process images that were created after this time HH:MM:SS',default="00:00:00")
+parser.add_argument('--before',required=False,type=str,help='Only process images that were created before this time HH:MM:SS',default="23:59:59")
+parser.add_argument('--keepcolour',required=False, default=False, help="Tool tries to identify the cameras as colour/greyscale and only keeps greyscale. Setting this uses all the cameras",action="store_true")
+#parser.add_argument('--xvalfoldspercamera',required=False,type=int,help='Number of cross-validation folds. Default: set to leave out one item from each camera in turn.', default=1)
+#parser.add_argument('--xvalheldoutcount',required=False,type=int,help='How many items to hold out each time (default = 1)', default=1)
+#parser.add_argument('--refreshcache',help='Whether to refresh the decoding cache',action="store_true",default=False)
+#parser.add_argument('--threshold',help='Threshold of score before adding to data',type=str,default=0)
+parser.add_argument('--tagsource',help='The source of labelled data (default:btviewer)',type=str,default='btviewer')
+parser.add_argument('--taglabel',help='The label id of the source data (default:none)',type=str,default='')
+parser.add_argument('--alignmentsourcename',help='The source of alignment analysis (default:btalignment)',type=str,default='btalignment')
+parser.add_argument('--sourcename',help='The name to give this source of labels (default:btinference)',type=str,default='btinference')
+parser.add_argument('--lengthscale',help='The kernel lengthscale (default:2m/s)',type=float,default=2)
+parser.add_argument('--kernelscale',help='The kernel variance (default:50m^2)',type=float,default=50)
+parser.add_argument('--Nsteps',help='Number of steps of the DSVI optimiser (default 500)',type=int,default=800)
+parser.add_argument('--stepsize',help='Stepsize of the DSVI optimiser (default 0.05)',type=float,default=0.05)
+parser.add_argument('--likenoisescale',help='Standard deviation of the likelihood normal distribution (default 0.05m)',type=float,default=0.05)
+parser.add_argument('--makeanimation',required=False, default=False, help="Make a top-down animation of the inference result.",action="store_true")
+
+
+#TODO: Might want to either; (a) overwrite, (b) skip, (c) append...
+#parser.add_argument('--',help='Stops it overwriting previous labels from this source (default behaviour is to do overwrite)',action="store_true") 
+args = parser.parse_args()
+
+if args.taglabel!='':
+    print("Tag Label Section not yet implemented")
+    sys.exit()
+taglabel = args.taglabel
+
+datapath = args.imgpath
+calset = args.calset
+sourcename = args.sourcename
+tagsource = args.tagsource
+keepcolour = args.keepcolour
+datapath = Path(datapath).resolve()
+sessionpath = datapath.parent
+calsetpath = sessionpath.joinpath(calset)
+alignmentsourcename = args.alignmentsourcename
+print("Data path: %s" % datapath)
+print("Session path: %s" % sessionpath)
+#Get the calibration set paths (to each relevant camera)
+calsetpaths = list(calsetpath.glob('*/*'))
+print("Checking these calibration sets:")
+for p in calsetpaths:
+    print("  "+p.as_posix())
+
+if not keepcolour:
+    allcalimgfiles = [sorted(p.glob('*.np')) for p in calsetpaths]
+    print("Removing colour cameras from set")
+    #TODO Convert helper function to use pathlib
+    greyscale = [alignment.helper.guesscamtypegetscore(imgfiles[0])<0.02 for imgfiles in allcalimgfiles]    
+    calsetpaths = [p for p,g in zip(calsetpaths,greyscale) if g]
+
+
+#load the tag datafiles (for relevant cameras)
+tagsetpaths = list(datapath.glob('*/*'))
+if not keepcolour:
+    alltagimgfiles = [sorted(p.glob('*.np')) for p in tagsetpaths]
+    print("Removing colour cameras from set")
+    greyscale = [alignment.helper.guesscamtypegetscore(imgfiles[0])<0.02 for imgfiles in alltagimgfiles]
+    tagsetpaths = [p for p,g in zip(tagsetpaths,greyscale) if g]
+
+#Print information
+print("Base path: %s" % datapath.as_posix())
+print("Searched %s for calibration sets." % calsetpath.as_posix())
+print("Using these calibration sets:")
+for p in calsetpaths:
+    print("  "+p.as_posix())
+    
+print("Using these tag sources:")
+for p in tagsetpaths:
+    print("  "+p.as_posix())
+    
+    
+#Start analysis (camera positions, observations, paths)
+cameras = btinference.getcameras(calsetpaths, alignmentsourcename)
+if len(cameras)==0:
+    print("Failed to find cameras")
+    sys.exit()
+print("Cameras:")
+[print(camidst) for camidst in cameras]
+obstimes, observations,_ = btinference.getobservations(tagsetpaths,tagsource,cameras)
+
+print("Found %d observations." % len(observations))
+if len(observations)==0:
+    print("No observations found.")
+    sys.exit()
+    
+print("Inferring flight path...")
+kernel = EQ(args.lengthscale, args.kernelscale)
+pathi = PathInference(obstimes, observations, kernel, likenoisescale=args.likenoisescale)
+pathi.run(args.Nsteps,args.stepsize)
+
+if args.makeanimation:
+    Xtest = pathi.buildinputmatrix(500)
+    M,C = pathi.getpredictions(Xtest)
+    btinference.makeanimation(Xtest,observations,obstimes,M,C)
+
+#Generate json point files
+
+filenames = sorted(list(datapath.rglob('*.np')))
+times = np.array([btinference.totalsecsandms(fn.as_posix()) for fn in filenames])
+
+Mobstimes, Cobstimes = pathi.getpredictions(pathi.buildinputmatrix(times))
+print("Saving %d prediction points into json files" % len(Mobstimes))
+
+for fn, t, m, c in zip(filenames,times,Mobstimes,Cobstimes):
+    #print("%7.3f %7.3f" % (t-min(times),np.max(np.sqrt(np.diag(c)))))
+    #if np.max(np.diag(c))>0.1: continue
+    pathparts = fn.parts
+    jsonf = pathparts[-1][:-2]+'json'
+    camid = pathparts[-2]
+    boxid = pathparts[-3]
+    camstid = boxid+'/'+camid
+    #print(camstid)
+    if camstid in cameras:
+        cam = cameras[camstid]
+        pixelpos = cam.get_pixel_loc(m.numpy())[0]   
+        jsonfn = Path(*list(pathparts)[:-1]+['btinference']+[jsonf])
+
+        json_items = []
+        json_items.append({"x":int(pixelpos[0]),"y":int(cam.res[1]-pixelpos[1]), "source": "btinference", "version": "btinference, v1.0", "meta":"", "label":"%0.3f" % np.max(np.sqrt(np.diag(c)))})
+        
+        pixelposes = cam.get_pixel_loc(np.random.multivariate_normal(m.numpy(),c.numpy(),100))
+        for pixelpos in pixelposes:
+            json_items.append({"x":int(pixelpos[0]),"y":int(cam.res[1]-pixelpos[1]), "source": "btinference", "version": "btinference, v1.0", "meta":"", "label":""})
+        
+        Path(jsonfn).parents[0].mkdir(parents=True, exist_ok=True)
+        #print(jsonfn)        
+        json.dump(json_items,open(jsonfn,'w'))
