@@ -8,7 +8,8 @@ Example:
 
 1) Install tensorflow (from [https://www.tensorflow.org/install/pip](tensorflow's page)):
 ```
-https://www.tensorflow.org/install/pip
+python3 -m pip install 'tensorflow[and-cuda]'
+pip install --upgrade tensorflow-probability
 ```
 2) then install pathinference,
 ```
