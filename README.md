@@ -10,11 +10,11 @@ Example:
 ```
 https://www.tensorflow.org/install/pip
 ```
-then install pathinference,
+2) then install pathinference,
 ```
 pip install git+https://github.com/SheffieldMLtracking/pathinference.git
 ```
-finally install this package:
+3) finally install this package:
 ```
 pip install git+https://github.com/SheffieldMLtracking/btinference.git
 ```
