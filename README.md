@@ -10,6 +10,7 @@ Example:
 ```
 python3 -m pip install 'tensorflow[and-cuda]'
 pip install --upgrade tensorflow-probability
+pip install tf-keras
 ```
 2) then install pathinference,
 ```
