@@ -20,7 +20,7 @@ def getcameras(calsetpaths,alignmentsourcename):
     #create the camera objects from the alignment data...
     cameras = {}
     for path in calsetpaths:
-        print("Looking in %s for camera" % path.as_posix())
+        print("Looking in %s for camera" % path)
         jsonfile = path.joinpath(alignmentsourcename+'/alignment.json')
         camsetid = getcamsetid(path)
         jsondata = json.load(open(jsonfile,'r'))

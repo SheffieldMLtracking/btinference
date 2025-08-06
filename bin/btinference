@@ -8,10 +8,25 @@ from pathinference.kernel import EQ
 import btinference
 import os
 import sys
+import re
 from pathlib import Path
 import json
+from btretrodetect.utils import get_cam_paths
 
 
+def totalsecs(st):
+    time_hms = [int(s) for s in re.findall('([0-9]{1,2})[:+]([0-9]{2})[:+]([0-9]{2})',st)[0]]
+    return time_hms[0]*3600 + time_hms[1]*60 + time_hms[2]
+    
+def getgreyscalepaths(calsetpath):
+    greyscalecalsetpaths = []
+    for p in calsetpath.glob('*'):
+        print(type(p),p)
+        paths = get_cam_paths(p.as_posix())
+        if True in paths:            
+            greyscalecalsetpaths.append(Path(paths[True]))
+    return list(set(greyscalecalsetpaths))
+    
 parser = argparse.ArgumentParser(description='Runs the 3d path inference algorithm for the bee-track project. This can either run a cross validation check, or can simply output the flight path.')
 parser.add_argument('imgpath',type=str,help='Path to images (this needs to be to the *set* folder, e.g. 2024-06-20/CalibTest200624/conetag2')
 parser.add_argument('--calset',required=False,type=str,help='Name of the alignment set (default = \'cal\'). This will look in a neighbouring folder to the set.',default='cal')
@@ -55,27 +70,31 @@ calsetpath = sessionpath.joinpath(calset)
 alignmentsourcename = args.alignmentsourcename
 print("Data path: %s" % datapath)
 print("Session path: %s" % sessionpath)
-#Get the calibration set paths (to each relevant camera)
-calsetpaths = list(calsetpath.glob('*/*'))
-print("Checking these calibration sets:")
-for p in calsetpaths:
-    print("  "+p.as_posix())
 
-if not keepcolour:
-    allcalimgfiles = [sorted(p.glob('*.np')) for p in calsetpaths]
-    print("Removing colour cameras from set")
-    #TODO Convert helper function to use pathlib
-    greyscale = [alignment.helper.guesscamtypegetscore(imgfiles[0])<0.02 for imgfiles in allcalimgfiles]    
-    calsetpaths = [p for p,g in zip(calsetpaths,greyscale) if g]
+
+if keepcolour:
+    calsetpaths = list(calsetpath.glob('*/*'))
+else:
+    calsetpaths = getgreyscalepaths(calsetpath)
+    
+
 
 
 #load the tag datafiles (for relevant cameras)
 tagsetpaths = list(datapath.glob('*/*'))
-if not keepcolour:
-    alltagimgfiles = [sorted(p.glob('*.np')) for p in tagsetpaths]
-    print("Removing colour cameras from set")
-    greyscale = [alignment.helper.guesscamtypegetscore(imgfiles[0])<0.02 for imgfiles in alltagimgfiles]
-    tagsetpaths = [p for p,g in zip(tagsetpaths,greyscale) if g]
+
+if keepcolour:
+    tagsetpaths = list(datapath.glob('*/*'))
+else:
+    tagsetpaths = getgreyscalepaths(datapath)
+
+#if not keepcolour:
+#    alltagimgfiles = [sorted(p.glob('*.np')) for p in tagsetpaths]
+#    print("Removing colour cameras from set")
+#    greyscale = [alignment.helper.guesscamtypegetscore(imgfiles[0])<0.02 for imgfiles in alltagimgfiles]
+#    tagsetpaths = [p for p,g in zip(tagsetpaths,greyscale) if g]
+
+
 
 #Print information
 print("Base path: %s" % datapath.as_posix())
@@ -83,11 +102,16 @@ print("Searched %s for calibration sets." % calsetpath.as_posix())
 print("Using these calibration sets:")
 for p in calsetpaths:
     print("  "+p.as_posix())
-    
-print("Using these tag sources:")
-for p in tagsetpaths:
-    print("  "+p.as_posix())
-    
+print("Tag set paths:")
+print(tagsetpaths)
+#print("Using these calibration sets:")
+#for p in calsetpaths:
+#    print("  "+p)
+#
+#print("Using these tag sources:")
+#for p in tagsetpaths:
+#    print("  "+p.as_posix())
+#print("--")
     
 #Start analysis (camera positions, observations, paths)
 cameras = btinference.getcameras(calsetpaths, alignmentsourcename)
@@ -115,7 +139,28 @@ if args.makeanimation:
 
 #Generate json point files
 
-filenames = sorted(list(datapath.rglob('*.np')))
+#TODO: Need to use before/after for observation selection too!!
+##TODO: Could do this selection based on times of observations?
+
+if args.after is not None:
+    after = totalsecs(args.after)
+else:
+    after = obstimes[0]-5
+    
+if args.before is not None:
+    before = totalsecs(args.before)
+else:
+    before = obstimes[-1]+5
+print("After and Before:")
+print(after,before)
+filenames = []
+for fn in sorted(list(datapath.rglob('*.np'))):
+    phototime = totalsecs(fn.as_posix())
+    if before>=phototime>=after:
+        filenames.append(fn)
+print("Adding predictions to these times")
+print(filenames)
+#filenames = sorted(list(datapath.rglob('*.np')))
 times = np.array([btinference.totalsecsandms(fn.as_posix()) for fn in filenames])
 
 Mobstimes, Cobstimes = pathi.getpredictions(pathi.buildinputmatrix(times))
