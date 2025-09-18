@@ -22,3 +22,24 @@ pip install git+https://github.com/SheffieldMLtracking/btinference.git
 ```
 If you want to render the path install:
 ```sudo apt-get install ffmpeg```
+
+# Usage
+
+Ran on server:
+cd /mnt/san/shared/pml_group/Shared/beephotos/2025-09-09/Displacement_11
+sudo btalignment . --maxnum 40 --calset cal
+
+Then to view the results:
+btqviewer . --nobrowser --port 5002 --highlight
+Ran on my laptop:
+ssh -N -L 5002:localhost:5002 sa_md1xmtsx@ohiobeeproject.sheffield.ac.uk
+(then ran btqviewer on my laptop anywhere, just to open the right page in the browser, set port to 5002)
+
+Because we have the non-compacted cal data in a different folder, after doing the alignment one needs to
+copy the 'cal' folder (really it's just the cal/1010/
+Ran on server:
+sudo cp cal ../Displacement_11_compact/cal -r
+
+Then cded to the right folder:
+cd /mnt/san/shared/pml_group/Shared/beephotos/2025-09-09/Displacement_11_compact
+sudo btinference --calset cal --makeanimation bee_1_compact
