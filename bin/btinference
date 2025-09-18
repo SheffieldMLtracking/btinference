@@ -31,8 +31,8 @@ parser = argparse.ArgumentParser(description='Runs the 3d path inference algorit
 parser.add_argument('imgpath',type=str,help='Path to images (this needs to be to the *set* folder, e.g. 2024-06-20/CalibTest200624/conetag2')
 parser.add_argument('--calset',required=False,type=str,help='Name of the alignment set (default = \'cal\'). This will look in a neighbouring folder to the set.',default='cal')
 parser.add_argument('--xval',help='Setting this means the algorithm will just do a cross-validation check (and won\'t write to the config file).',action="store_true")
-parser.add_argument('--after',required=False,type=str,help='Only process images that were created after this time HH:MM:SS',default="00:00:00")
-parser.add_argument('--before',required=False,type=str,help='Only process images that were created before this time HH:MM:SS',default="23:59:59")
+parser.add_argument('--after',required=False,type=str,help='Only process images that were created after this time HH:MM:SS',default=None)
+parser.add_argument('--before',required=False,type=str,help='Only process images that were created before this time HH:MM:SS',default=None)
 parser.add_argument('--keepcolour',required=False, default=False, help="Tool tries to identify the cameras as colour/greyscale and only keeps greyscale. Setting this uses all the cameras",action="store_true")
 #parser.add_argument('--xvalfoldspercamera',required=False,type=int,help='Number of cross-validation folds. Default: set to leave out one item from each camera in turn.', default=1)
 #parser.add_argument('--xvalheldoutcount',required=False,type=int,help='How many items to hold out each time (default = 1)', default=1)
@@ -133,33 +133,40 @@ pathi = PathInference(obstimes, observations, kernel, likenoisescale=args.likeno
 pathi.run(args.Nsteps,args.stepsize)
 
 if args.makeanimation:
+    animationfilename = 'animation_'+datapath.stem+'.mp4'
+    print("Saving animation to %s" % animationfilename)
     Xtest = pathi.buildinputmatrix(500)
     M,C = pathi.getpredictions(Xtest)
-    btinference.makeanimation(Xtest,observations,obstimes,M,C)
+    btinference.makeanimation(Xtest,observations,obstimes,M,C,animationfilename=animationfilename)
 
 #Generate json point files
 
 #TODO: Need to use before/after for observation selection too!!
 ##TODO: Could do this selection based on times of observations?
 
+#print("DEBUG")
+#print(obstimes[0]-3, totalsecs(args.after))
+#print(obstimes[-1]+3, totalsecs(args.before))
 if args.after is not None:
     after = totalsecs(args.after)
 else:
-    after = obstimes[0]-5
+    after = int(obstimes[0]-3)
     
 if args.before is not None:
     before = totalsecs(args.before)
 else:
-    before = obstimes[-1]+5
-print("After and Before:")
+    before = int(obstimes[-1]+3)+1
+
+print("After and Before times:")
 print(after,before)
+
 filenames = []
 for fn in sorted(list(datapath.rglob('*.np'))):
     phototime = totalsecs(fn.as_posix())
     if before>=phototime>=after:
         filenames.append(fn)
-print("Adding predictions to these times")
-print(filenames)
+print("Adding predictions to %d file times" % len(filenames))
+#print(filenames)
 #filenames = sorted(list(datapath.rglob('*.np')))
 times = np.array([btinference.totalsecsandms(fn.as_posix()) for fn in filenames])
 
