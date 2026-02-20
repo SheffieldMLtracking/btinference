@@ -3,8 +3,7 @@ import argparse
 import alignment
 import alignment.helper
 import numpy as np
-from pathinference import PathInference
-from pathinference.kernel import EQ
+from pathinference.particle import Smooth
 import btinference
 import os
 import sys
@@ -13,7 +12,6 @@ from pathlib import Path
 import json
 from btretrodetect.utils import get_cam_paths
 import pickle
-import tensorflow as tf
 
 
 def totalsecs(st):
@@ -38,26 +36,19 @@ parser.add_argument('--interval_start',required=False,type=float,help='Only proc
 parser.add_argument('--after',required=False,type=str,help='Only process images that were created after this time HH:MM:SS',default=None)
 parser.add_argument('--before',required=False,type=str,help='Only process images that were created before this time HH:MM:SS',default=None)
 parser.add_argument('--keepcolour',required=False, default=False, help="Tool tries to identify the cameras as colour/greyscale and only keeps greyscale. Setting this uses all the cameras",action="store_true")
-#parser.add_argument('--xvalfoldspercamera',required=False,type=int,help='Number of cross-validation folds. Default: set to leave out one item from each camera in turn.', default=1)
-#parser.add_argument('--xvalheldoutcount',required=False,type=int,help='How many items to hold out each time (default = 1)', default=1)
-#parser.add_argument('--refreshcache',help='Whether to refresh the decoding cache',action="store_true",default=False)
-#parser.add_argument('--threshold',help='Threshold of score before adding to data',type=str,default=0)
+
+
 parser.add_argument('--tagsource',help='The source(s) of labelled data (default:btviewer). Can pass a list, e.g. --tagsource btviewer btretrodetect_inference',type=str,nargs='+',default='btviewer')
 parser.add_argument('--taglabel',help='The label id of the source data (default:none)',type=str,default='')
 parser.add_argument('--alignmentsourcename',help='The source of alignment analysis (default:btalignment)',type=str,default='btalignment')
 parser.add_argument('--sourcename',help='The name to give this source of labels (default:btinference)',type=str,default='btinference')
-parser.add_argument('--lengthscale',help='The kernel lengthscale (default:2.2s)',type=float,default=2.2)
-parser.add_argument('--jitter',help='The initial jitter (default = 0.0001)',type=float,default=0.0001)
-parser.add_argument('--kernelscale',help='The kernel scale (default:50m)',type=float,default=50)
-parser.add_argument('--Nsamps',help='Number of samples to use in the doubly stochastic VI optimiser (default 100)',type=int,default=100)
-parser.add_argument('--Nsteps',help='Number of steps of the DSVI optimiser (default 10000)',type=int,default=10000)
-#parser.add_argument('--Nind',help='Number of inducing points (default: 1+3*truncate(observation_period/lengthscale))',type=int,default=800)
-parser.add_argument('--stepsize',help='Stepsize of the DSVI optimiser (default 0.005)',type=float,default=0.005)
-parser.add_argument('--likenoisescale',help='Standard deviation of the likelihood normal distribution (default 0.08m)',type=float,default=0.08)
+parser.add_argument('--particles',help='The number of particles (default:10000)',type=int,default=10000)
+parser.add_argument('--likelihood_std',help='Standard deviation of the likelihood normal distribution (default 0.05m)',type=float,default=0.05)
 parser.add_argument('--makeanimation',required=False, type=str, help="Make a top-down animation of the inference result (specify filename, e.g. test.mp4)",default=None)
 #parser.add_argument('--fastcache',required=False, default=False, help="Whether to save/load a 100 second chunk of inference path (makes it fast to infer new path, if using pretrained model)",action="store_true")
 parser.add_argument('--refreshfastcache',required=False, default=False, help="Runs with fastcache but refreshes the cache.",action="store_true")
-parser.add_argument('--optimisemore',required=False, default=False, help="Keep optimising, even though files not changed.",action="store_true")
+
+
 
 
 #TODO: Might want to either; (a) overwrite, (b) skip, (c) append...
@@ -83,7 +74,7 @@ datapath = Path(datapath).resolve()
 sessionpath = datapath.parent
 calsetpath = sessionpath.joinpath(calset)
 alignmentsourcename = args.alignmentsourcename
-inference_cache_fn =Path(datapath,'cache_start%0.0f_interval%0.0f.pkl' % (interval_start,interval))
+inference_cache_fn =Path(datapath,'pf_cache_start%0.0f_interval%0.0f.pkl' % (interval_start,interval))
 print("Data path: %s" % datapath)
 print("Session path: %s" % sessionpath)
 print("Using as tag source(s): ",end="")
@@ -162,13 +153,10 @@ print("Found %d observations." % len(observations))
 
 
 
-
-kernel = EQ(args.lengthscale, args.kernelscale)
-
 if interval is not None:
     print("Restricting observations to specified interval:")
     print("   Interval: %0.1f-%0.1f seconds interval." % (interval_start,interval_start+interval))
-    keep = (obstimes<first_observation_time+interval+interval_start+kernel.ls*2) & (obstimes>first_observation_time+interval_start-kernel.ls*2)
+    keep = (obstimes<first_observation_time+interval+interval_start+3) & (obstimes>first_observation_time+interval_start-3)
     print("   Observation times: %0.1f - %0.1f" % (np.min(obstimes),np.max(obstimes)))
     obstimes = obstimes[keep]
     observations = observations[keep]
@@ -191,16 +179,13 @@ tmin,tmax = np.min(obstimes),np.max(obstimes)
 print("%02d:%02d:%05.2f" % (tmin//3600,(tmin%3600)//60,tmin%60))
 print("%02d:%02d:%05.2f" % (tmax//3600,(tmax%3600)//60,tmax%60))    
 
-print('Saving temporary observation record in tempobs.pkl') 
-pickle.dump([obstimes, observations],open('tempobs.pkl','wb'))
-sys.exit()
+
 
 #print("Observations from time (seconds) %d to %d" % (np.min(obstimes),np.max(obstimes)))
 print("\nInferring flight path...")
 
-mu=None
-scale=None
 
+lims = [[-2,12],[-2,12],[-5,5]]
 
 pathi = None
 if not args.refreshfastcache:
@@ -218,32 +203,33 @@ if not args.refreshfastcache:
                 print("Inference for this set already cached and run, exiting.")
                 sys.exit()
 
-        mu = tf.Variable(inference_cache['mu'],dtype=tf.float32)
-        scale = tf.Variable(inference_cache['scale'],dtype=tf.float32)
-        Z = tf.Variable(inference_cache['Z'],dtype=tf.float32)
-        #print(Z.shape)
-        pathi = PathInference(obstimes, observations, kernel, likenoisescale=args.likenoisescale,Z=Z)
+        
+        times = inference_cache['times']
+        means = inference_cache['means']
+        covs = inference_cache['covs']
+
+        pathi = PathInference(obstimes, observations, lims, times, means, covs)
     except Exception as e:
         print("Unable to load inference cache:")
         print(e)
 if pathi is None:
-    pathi = PathInference(obstimes, observations, kernel, likenoisescale=args.likenoisescale,IndStartEnd=(first_observation_time+interval_start-kernel.ls*2,first_observation_time+interval_start+interval+kernel.ls*2))
+    pathi = Smooth(obstimes,observations,lims,Nparticles=args.particles,likelihood_std=args.likelihood_std)
+    print("Running Inference")
+    pathi.run()
 
-
-print("Running Inference")
-pathi.run(args.Nsteps,args.stepsize,mu=mu,scale=scale, Nsamps=args.Nsamps,jitter=args.jitter)
-
-pickle.dump({'obsfrom':obsfrom,'logprobs':pathi.last_logprobs.numpy().astype(float)},open(Path(datapath,'last_logprobs.pkl'),'wb'))
+#pickle.dump({'obsfrom':obsfrom,'logprobs':pathi.last_logprobs.numpy().astype(float)},open(Path(datapath,'last_logprobs.pkl'),'wb'))
 
 if args.makeanimation is not None:
-    try:
+#    try:
         animationfilename = args.makeanimation #'animation_'+datapath.stem+'.mp4'
         print("Saving animation to %s" % animationfilename)
-        Xtest = pathi.buildinputmatrix(500)
-        M,C = pathi.getpredictions(Xtest)
-        btinference.makeanimation(Xtest,observations,obstimes,M,C,animationfilename=animationfilename)
-    except:
-        print("Exception occured while generating animation.")
+        animation_times = np.arange(np.min(pathi.times),np.max(pathi.times),0.1)
+        print(animation_times)
+        M,C = pathi.getpredictions(animation_times)
+        print(M.shape)
+        btinference.makeanimation(animation_times,observations,obstimes,M[:,:3],C[:,:3,:3],animationfilename=animationfilename)
+#    except Exception as e:
+#        print("Exception occured while generating animation.")
 #Generate json point files
 
 #TODO: Need to use before/after for observation selection too!!
@@ -268,7 +254,12 @@ print("Adding predictions to %d file times" % len(filenames))
 #filenames = sorted(list(datapath.rglob('*.np')))
 times = np.array([btinference.totalsecsandms(fn.as_posix()) for fn in filenames])
 
-Mobstimes, Cobstimes = pathi.getpredictions(pathi.buildinputmatrix(times))
+Mobstimes, Cobstimes = pathi.getpredictions(times)
+
+#just get position not velocity...
+Mobstimes = Mobstimes[:,:3]
+Cobstimes = Cobstimes[:,:3,:3]
+
 print("Saving %d prediction points into json files" % len(Mobstimes))
 
 for fn, t, m, c in zip(filenames,times,Mobstimes,Cobstimes):
@@ -282,18 +273,19 @@ for fn, t, m, c in zip(filenames,times,Mobstimes,Cobstimes):
     #print(camstid)
     if camstid in cameras:
         cam = cameras[camstid]
-        pixelpos = cam.get_pixel_loc(m.numpy())[0]   
+        print(m)
+        pixelpos = cam.get_pixel_loc(m)[0]   
         jsonfn = Path(*list(pathparts)[:-1]+['btinference']+[jsonf])
 
         json_items = []
         #json_items.append({"x":int(pixelpos[0]),"y":int(cam.res[1]-pixelpos[1]), "source": "btinference", "version": "btinference, v1.0", "meta":"", "label":"%0.3f" % np.max(np.sqrt(np.diag(c)))})
         
-        pixelposes = cam.get_pixel_loc(np.random.multivariate_normal(m.numpy(),c.numpy(),100))
+        pixelposes = cam.get_pixel_loc(np.random.multivariate_normal(m,c,100))
         for i,pixelpos in enumerate(pixelposes):
             item = {"x":int(pixelpos[0]),"y":int(cam.res[1]-pixelpos[1]), "source": "btinference", "version": "btinference, v1.0","meta":"", "label":""}
             if i==0: #the first point can store the mean and covariance of the distribution
-                item["mean"] = m.numpy().tolist()
-                item["cov"] = c.numpy().tolist()
+                item["mean"] = m.tolist()
+                item["cov"] = c.tolist()
             json_items.append(item)
         
         Path(jsonfn).parents[0].mkdir(parents=True, exist_ok=True)
@@ -303,29 +295,20 @@ for fn, t, m, c in zip(filenames,times,Mobstimes,Cobstimes):
 
 #datapath
 jsonfn =Path(datapath,'inference_start%0.0f.json' % interval_start)
-Xtest = pathi.buildinputmatrix(0.1)
-M,C = pathi.getpredictions(Xtest)
+test_times = np.arange(np.min(pathi.times),np.max(pathi.times),0.1)
+M,C = pathi.getpredictions(test_times)
+
 json_fulldata = []
 #json_fulldata = json.load(open(jsonfn,'r'))
-for t, m, c in zip(Xtest[:,0],M,C):
+for t, m, c in zip(test_times,M,C):
     #just include those within our window!
     if (t>=first_observation_time+interval_start) and (t<first_observation_time+interval_start+interval):
         item = {}
-        item["time"] = t.numpy().astype(float)
-        item["mean"] = m.numpy().tolist()
-        item["cov"] = c.numpy().tolist()
+        item["time"] = t
+        item["mean"] = m.tolist()
+        item["cov"] = c.tolist()
         json_fulldata.append(item)
 json.dump(json_fulldata,open(jsonfn,'w'))
 
 
-##
-pickle.dump({'obsfrom':obsfrom,'logprobs':pathi.last_logprobs.numpy().astype(float)},open(Path(datapath,'last_logprobs.pkl'),'wb'))
-logprobs = pathi.last_logprobs.numpy().astype(float)
-indexes = np.argsort(np.mean(logprobs,0))
-print("-----------------")
-print("Low scoring observations:")
-for index in indexes[:5]:
-    print("%9.2f -> %s" % (np.mean(logprobs[:,index]),obsfrom[index]))
-print("-----------------")
-
-pickle.dump({'mu':pathi.mu.numpy().astype(float),'scale':pathi.scale.numpy().astype(float),'Z':pathi.Z.numpy().astype(float),'obsfrom':obsfrom},open(inference_cache_fn,"wb"))
+pickle.dump({'means':pathi.means,'covs':pathi.covs,'times':pathi.times,'obsfrom':obsfrom},open(inference_cache_fn,"wb"))

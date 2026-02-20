@@ -11,5 +11,5 @@ setup(
   keywords = ['3d','path','bee','flight','cameras','pose','position'],
   classifiers = [],
   install_requires=['numpy'],
-  scripts=['bin/btinference'],
+  scripts=['bin/btinference','bin/btinference-changes'],
 )

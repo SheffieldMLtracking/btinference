@@ -21,7 +21,15 @@ pip install git+https://github.com/SheffieldMLtracking/pathinference.git
 pip install git+https://github.com/SheffieldMLtracking/btinference.git
 ```
 If you want to render the path install:
-```sudo apt-get install ffmpeg```
+```
+sudo apt-get install ffmpeg
+```
+
+Or maybe just use this?
+
+```
+pip install opencv-python-headless
+```
 
 # Usage
 

@@ -1,0 +1,23 @@
+#!/usr/bin/env python
+
+import argparse
+import numpy as np
+import os
+
+parser = argparse.ArgumentParser(description='Loops over the 3d path inference algorithm for the bee-track project. Splits into 30 second chunks.')
+parser.add_argument('imgpath',type=str,help='Path to images (this needs to be to the *set* folder, e.g. 2024-06-20/CalibTest200624/conetag2')
+parser.add_argument('--length',type=float,required=False, help='How many seconds worth to run the algorithm over, default = 480.',default=480)
+parser.add_argument('--jitter',help='The initial jitter (default = 0.0001)',type=float,default=0.0001)
+parser.add_argument('--Nsteps',type=int,required=False, help='How many steps in each block, default = 5000.',default=5000)
+parser.add_argument('--refreshfastcache',required=False, default=False, help="Runs with fastcache but refreshes the cache.",action="store_true")
+parser.add_argument('--optimisemore',required=False, default=False, help="Keep optimising, even though files not changed.",action="store_true")
+parser.add_argument('--loop',required=False, default=False, help="Loop indefinitely.",action="store_true")
+args = parser.parse_args()
+
+while True:
+    for interval_start in np.arange(0,args.length,30):
+        print("============STARTING BLOCK %0.0f TO %0.0f==============" % (interval_start,interval_start+30))
+        command = 'btinference %s --Nsteps %d --interval_length 30 --jitter %0.6f --interval_start %0.0f%s%s' % (args.imgpath,args.Nsteps,args.jitter,interval_start," --refreshfastcache" if args.refreshfastcache else ""," --optimisemore" if args.optimisemore else "")
+        print("RUNNING: %s" % command)
+        os.system(command)
+    if not args.loop: break
